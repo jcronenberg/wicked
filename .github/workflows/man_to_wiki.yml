@@ -1,0 +1,57 @@
+name: deploy-wiki
+on:
+  push:
+    branches: "actions_test"
+
+jobs:
+  deploy-wiki:
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: sudo apt install pandoc
+
+      - name: Generate man pages
+        run: |
+          mkdir generated_md
+          for manpage in *.in; do
+            if [ ! -d $manpage ]; then
+              new_file="generated_md/${manpage/\.[0-9]\.in/.md}"
+              pandoc --from man --to gfm < $manpage > $new_file
+              sed -i 's/> //g' $new_file
+              sed -i '/<!--.*-->/d' $new_file
+              sed -i 's/    " /    /' $new_file
+              sed -i 's/^" //' $new_file
+            fi
+            find ./generated_md -type f -name "*.md" -size -2c -delete
+          done
+        working-directory: ./man
+
+      - name: Push wiki
+        run: |
+          github_server_url=${{ github.server_url }}
+
+          tmp_dir=$(mktemp -d)
+          trap 'rm -rf "$tmp_dir"' SIGINT SIGTERM ERR EXIT
+
+          git config --global --add safe.directory "$tmp_dir"
+
+          protocol=$(echo "$github_server_url" | cut -d/ -f1)
+          host=$(echo "$github_server_url" | cut -d/ -f3)
+          git clone "$protocol//x:${{ github.token }}@$host/${{ github.repository }}.wiki.git" "$tmp_dir" --depth 1
+
+          cp -afv ./* "$tmp_dir"
+
+          cd "$tmp_dir"
+
+          git config user.name github-actions[bot]
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+          git add -Av
+          git commit --allow-empty -m 'Deploy wiki'
+
+          git push origin master
+        working-directory: ./man/generated_md
